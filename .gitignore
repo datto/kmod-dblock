@@ -1,0 +1,26 @@
+
+# git ignores specifically for the kernel module after build
+
+
+.cache.mk
+.dblock.ko.cmd
+.dblock.mod.o.cmd
+.dblock.o.cmd
+.dblockmain.o.cmd
+.dblocktools.o.cmd
+.settings/
+.tmp_versions/
+Module.symvers
+dblock.ko
+dblock.mod.c
+dblock.mod.o
+dblock.o
+dblockmain.o
+dblockmain.o.ur-safe
+dblocktools.o
+modules.order
+/.dblock.mod.cmd
+/.breakpoint.mod.cmd
+/dblock.mod
+.cproject
+.project
