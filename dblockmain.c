@@ -428,6 +428,8 @@ static s32 dblock_operation_block_for_request(device_state *device, unsigned lon
 #else
                 int signal_number = kernel_dequeue_signal();
 #endif
+                if (signal_number == SIGURG)
+                  continue; // ignore sigurg because go.
                 if (signal_number > 0)
                   log_user_error(EINVAL, "Got signal %d waiting for cv", signal_number);
                 else
