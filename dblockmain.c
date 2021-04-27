@@ -118,6 +118,7 @@ static struct master_control_state_t
   {
     pil_mutex_t control_lock_mutex;
     u32 next_device_handle;
+    u32 userspace_waiting;
 
     struct list_head active_device_list;
 
@@ -734,8 +735,16 @@ static s32 ioctl_dblock_operation(unsigned long __user userspace)
 static long device_ioctl(struct file *f, unsigned int cmd, unsigned long __user userspace)
   {
     s32 ret = 0;
+    u32 logvalue;
+
     log_user_debug("start dblock_ioctl");
     log_user_debug("Ioctl: type=%x number=%x  direction=%x  size=%x", _IOC_TYPE(cmd), _IOC_NR(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd));
+
+    pil_mutex_lock(&master_control_state.control_lock_mutex);
+    master_control_state.userspace_waiting++;
+    logvalue = master_control_state.userspace_waiting;
+    pil_mutex_unlock(&master_control_state.control_lock_mutex);
+    log_user_debug("entering ioctl, userspace waiting count: %d", logvalue);
 
     if (cmd == IOCTL_DEVICE_PING)
       {
@@ -751,6 +760,12 @@ static long device_ioctl(struct file *f, unsigned int cmd, unsigned long __user 
         log_user_error(-EINVAL, "Unknown ioctl: %d", cmd);
         ret = -EINVAL;
       }
+
+    pil_mutex_lock(&master_control_state.control_lock_mutex);
+    master_control_state.userspace_waiting--;
+    logvalue = master_control_state.userspace_waiting;
+    pil_mutex_unlock(&master_control_state.control_lock_mutex);
+    log_user_debug("exiting ioctl, userspace waiting count: %d", logvalue);
 
     log_user_debug("Ioctl end: type=%x number=%x  direction=%x  size=%x", _IOC_TYPE(cmd), _IOC_NR(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd));
     log_user_debug("end dblock_ioctl");
@@ -847,59 +862,74 @@ static u32 unblock_userspace(device_state *device)
     s32 ret;
     u32 sleep_counter;
     u32 exit_processed;
+    u32 userspace_waiting;
 
     context = NULL;
     log_kern_debug("starting unblock userspace, failing all pending kernel requests...");
     free_pending_kernel_requests(device);
 
-    log_kern_debug("creating concurrent entry to tell userspace to exit.");
-    ret = create_concurrent_operation_entry(device, &context);
-    if (ret != 0)
+    pil_mutex_lock(&master_control_state.control_lock_mutex);
+    userspace_waiting = master_control_state.userspace_waiting;
+    pil_mutex_unlock(&master_control_state.control_lock_mutex);
+    if (userspace_waiting == 0)
+      userspace_waiting++; // always do at least one.
+
+    log_user_debug("unblock userspace, unblocking %d threads", userspace_waiting);
+
+    while (userspace_waiting > 0)
       {
-        log_kern_error(ret, "unable to create a concurrent operation entry in unblock_userspace.");
-        return ret;
-      }
+        log_user_debug("unblock userspace, blocked threads remaining: %d", userspace_waiting);
+        userspace_waiting--;
 
-    context->op.header.operation = DEVICE_OPERATION_KERNEL_USERSPACE_EXIT;
-    context->op.header.size = 0;
-    context->op.header.signal_number = 0;
-
-    log_kern_debug("about to lock request_block_lock for unblock userspace adding %u to unprocessed list", context->op.operation_id);
-    pil_mutex_lock(&device->request_block_lock);
-    device->concurrent_list_unprocessed_count++;
-    log_kern_debug("adding userspace exit concurrent entry unprocessed queue.");
-
-    list_add_tail(&(context->list_anchor), &device->concurrent_operations_list);
-    log_kern_debug("broadcasting request_block_cv to ioctl thread and setting concurrent_list_unprocessed_count to %u", device->concurrent_list_unprocessed_count);
-    pil_cv_broadcast(&device->request_block_cv);
-    log_kern_debug("about to unlock request_block_lock");
-    pil_mutex_unlock(&device->request_block_lock);
-
-    log_kern_debug("Waiting for userspace to pick up exit queue item.");
-    exit_processed = 0;
-    for (sleep_counter = 0; sleep_counter < 5; sleep_counter++)
-      {
-        u32 processed = 0;
-        msleep(1);
-        pil_mutex_lock(&device->request_block_lock);
-        pil_mutex_lock(&context->response_lock);
-        processed = context->processed;
-        pil_mutex_unlock(&context->response_lock);
-        pil_mutex_unlock(&device->request_block_lock);
-        if (processed)
+        context = NULL;
+        log_kern_debug("creating concurrent entry to tell userspace to exit.");
+        ret = create_concurrent_operation_entry(device, &context);
+        if (ret != 0)
           {
-            exit_processed = 1;
-            log_kern_debug("We found the exit queue item was marked processed, exiting cleanly.");
-            break;
+            log_kern_error(ret, "unable to create a concurrent operation entry in unblock_userspace.");
+            return ret;
           }
-      }
 
-    if (exit_processed == 0)
-      {
-        log_kern_info("we queued an exit item, but it was never picked up. Either userspace is already gone or it is too slow.");
-      }
+        context->op.header.operation = DEVICE_OPERATION_KERNEL_USERSPACE_EXIT;
+        context->op.header.size = 0;
+        context->op.header.signal_number = 0;
 
-    delete_concurrent_operation_entry(device, context);
+        log_kern_debug("about to lock request_block_lock for unblock userspace adding %u to unprocessed list", context->op.operation_id);
+        pil_mutex_lock(&device->request_block_lock);
+        device->concurrent_list_unprocessed_count++;
+        log_kern_debug("adding userspace exit concurrent entry unprocessed queue.");
+
+        list_add_tail(&(context->list_anchor), &device->concurrent_operations_list);
+        log_kern_debug("broadcasting request_block_cv to ioctl thread and setting concurrent_list_unprocessed_count to %u", device->concurrent_list_unprocessed_count);
+        pil_cv_broadcast(&device->request_block_cv);
+        log_kern_debug("about to unlock request_block_lock");
+        pil_mutex_unlock(&device->request_block_lock);
+
+        log_kern_debug("Waiting for userspace to pick up exit queue item.");
+        exit_processed = 0;
+        for (sleep_counter = 0; sleep_counter < 5; sleep_counter++)
+          {
+            u32 processed = 0;
+            msleep(1);
+            pil_mutex_lock(&device->request_block_lock);
+            pil_mutex_lock(&context->response_lock);
+            processed = context->processed;
+            pil_mutex_unlock(&context->response_lock);
+            pil_mutex_unlock(&device->request_block_lock);
+            if (processed)
+              {
+                exit_processed = 1;
+                log_kern_debug("We found the exit queue item was marked processed, exiting cleanly.");
+                break;
+              }
+          }
+
+        if (exit_processed == 0)
+          log_kern_info("we queued an exit item, but it was never picked up. Either userspace is already gone or it is too slow.");
+
+        delete_concurrent_operation_entry(device, context);
+      }
+      
     log_kern_debug("end of unblock_userspace.");
     return ret;
   }
@@ -2333,6 +2363,7 @@ static void master_control_state_init()
     pil_mutex_init(&master_control_state.control_lock_mutex);
     INIT_LIST_HEAD(&master_control_state.active_device_list);
     master_control_state.next_device_handle = 1;
+    master_control_state.userspace_waiting = 0;
   }
 
 static void master_control_state_destroy()
