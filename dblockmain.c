@@ -2079,17 +2079,27 @@ static s32 ioctl_block_device_destroy_by_name(unsigned long __user userspace)
 static void sync_gendisk(struct gendisk *disk)
   {
     struct disk_part_iter piter;
-	  struct hd_struct *part;
-
+    
+#if HAVE_HD_STRUCT == 1
+    struct hd_struct *part;
+#else
+    struct block_device *part;
+#endif
+	  
     disk_part_iter_init(&piter, disk, 0);
     while ((part = disk_part_iter_next(&piter))) {
       struct block_device *bdev = NULL;
-
-      bdev = bdget_disk(disk, part->partno);
+#if HAVE_HD_STRUCT == 1
+      u8 partno = part->partno;
+      bdev = bdget_disk(disk, partno);
       if (!bdev)
         continue;
+#else
+      u8 partno = part->bd_partno;
+      bdev = part;
+#endif
 
-      log_kern_info("syncing partition: %d", part->partno);
+      log_kern_info("syncing partition: %d", partno);
 
       fsync_bdev(bdev);
       bdput(bdev);
