@@ -2099,7 +2099,7 @@ static void sync_gendisk(struct gendisk *disk)
       bdev = part;
 #endif
 
-      log_kern_info("syncing partition: %d", part->partno);
+      log_kern_info("syncing partition: %d", partno);
 
       fsync_bdev(bdev);
       bdput(bdev);
