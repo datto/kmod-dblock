@@ -16,6 +16,10 @@ $(info HAVE_BLK_ALLOC_QUEUE_NODE = ${HAVE_BLK_ALLOC_QUEUE_NODE})
 HAVE_BIO_START_IO_ACCT := $(shell /bin/bash -c 'grep "bio_start_io_acct.*struct bio"    /usr/src/linux-headers-`uname -r`/include/linux/blkdev.h > /dev/null; echo $$(( 1 - $$? ))')
 $(info HAVE_BIO_START_IO_ACCT = ${HAVE_BIO_START_IO_ACCT})
 
+# 12/24/2021 they got rid of hd_struct somewhere around 5.11
+HAVE_HD_STRUCT                 := $(shell /bin/bash -c 'grep "struct hd_struct"      /usr/src/linux-headers-`uname -r`/include/linux/genhd.h > /dev/null; echo $$(( 1 - $$? ))')
+$(info HAVE_HD_STRUCT = ${HAVE_HD_STRUCT})
+
 obj-m += dblock.o
 dblock-y := dblocktools.o dblockmain.o
 
@@ -25,6 +29,7 @@ MY_CFLAGS += -Wunused-result
 MY_CFLAGS += -DHAVE_COMBINED_BLK_ALLOC_QUEUE=${HAVE_COMBINED_BLK_ALLOC_QUEUE}
 MY_CFLAGS += -DHAVE_BIO_START_IO_ACCT=${HAVE_BIO_START_IO_ACCT}
 MY_CFLAGS += -DHAVE_BLK_ALLOC_QUEUE_NODE=${HAVE_BLK_ALLOC_QUEUE_NODE}
+MY_CFLAGS += -DHAVE_HD_STRUCT=${HAVE_HD_STRUCT}
 ccflags-y += ${MY_CFLAGS}
 ccflags-y += -DBUILD_VERSION=\"$(BUILD_VERSION)\"
 
